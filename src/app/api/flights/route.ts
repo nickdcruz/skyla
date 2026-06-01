@@ -1,4 +1,4 @@
-// v1.0
+// v1.1
 import { NextRequest, NextResponse } from "next/server";
 import { SearchFlights } from "@/lib/fli/search/flights";
 import { FlightSearchFilters } from "@/lib/fli/models/google-flights/flights";
@@ -14,10 +14,12 @@ const SEAT_MAP: Record<string, number> = {
 };
 const STOP_MAP: Record<string, number> = {
   ANY: MaxStops.ANY, NON_STOP: MaxStops.NON_STOP, ONE_STOP_OR_FEWER: MaxStops.ONE_STOP_OR_FEWER,
+  TWO_STOPS_OR_FEWER: MaxStops.TWO_OR_FEWER_STOPS,
 };
 const SORT_MAP: Record<string, number> = {
   BEST: SortBy.BEST, CHEAPEST: SortBy.CHEAPEST, DURATION: SortBy.DURATION,
-  DEPARTURE_TIME: SortBy.DEPARTURE_TIME,
+  DEPARTURE_TIME: SortBy.DEPARTURE_TIME, ARRIVAL_TIME: SortBy.ARRIVAL_TIME,
+  TOP_FLIGHTS: SortBy.TOP_FLIGHTS,
 };
 
 function formatTime(d: Date): string {
@@ -60,7 +62,7 @@ export async function POST(req: NextRequest) {
       flight_segments: segments,
       seat_type: seat as 1 | 2 | 3 | 4,
       stops: stopVal as 0 | 1 | 2 | 3,
-      sort_by: sort as 0 | 1 | 2 | 3 | 4,
+      sort_by: sort as 0 | 1 | 2 | 3 | 4 | 5 | 6,
       show_all_results: true,
     });
 
@@ -86,7 +88,7 @@ export async function POST(req: NextRequest) {
     const normalised = results.flat().slice(0, 50);
     const flights = normalised.map((flight, idx: number) => {
       const legsData = (flight.legs ?? []).map((leg) => ({
-        airline: String(leg.airline ?? ""),
+        airline: String(leg.airline ?? "").replace(/^_/, ""),
         airlineName: AIRLINE_NAMES_MAP[String(leg.airline ?? "").replace(/^_/, "")] ?? String(leg.airline ?? ""),
         flightNumber: String(leg.flight_number ?? ""),
         departureAirport: String(leg.departure_airport ?? ""),

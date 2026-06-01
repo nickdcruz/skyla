@@ -1,4 +1,4 @@
-// v1.0
+// v1.1
 import { NextRequest, NextResponse } from "next/server";
 import { SearchDates } from "@/lib/fli/search/dates";
 import { DateSearchFilters } from "@/lib/fli/models/google-flights/dates";
@@ -14,6 +14,7 @@ const SEAT_MAP: Record<string, number> = {
 };
 const STOP_MAP: Record<string, number> = {
   ANY: MaxStops.ANY, NON_STOP: MaxStops.NON_STOP, ONE_STOP_OR_FEWER: MaxStops.ONE_STOP_OR_FEWER,
+  TWO_STOPS_OR_FEWER: MaxStops.TWO_OR_FEWER_STOPS,
 };
 
 export async function POST(req: NextRequest) {

@@ -1,66 +1,115 @@
-// v1.0
-// Helpers for encoding Google Flights "f.req" wire payloads.
+// v1.1
+/**
+ * Parser for Google Flights' FlightsFrontendService wire format.
+ *
+ * 1:1 port of fli/search/_wire.py — handles both the legacy single-chunk
+ * JSONP shape and the multi-chunk format used by GetBookingResults.
+ *
+ * Important quirk: the length headers count UTF-8 BYTES, not characters,
+ * so the parser operates on `Uint8Array` rather than the JS string.
+ */
 
-export const GOOGLE_FLIGHTS_SEARCH_URL =
-  "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=H4cFwe&source-path=%2Ftravel%2Fflights&f.sid=-1&bl=boq_travel-frontend-ui_20240101.00_p0&hl=en&soc-app=162&soc-platform=1&soc-device=1&_reqid=1&rt=c";
+const PREFIX = ")]}'";
+const PREFIX_BYTES = new TextEncoder().encode(PREFIX);
 
-export const GOOGLE_FLIGHTS_DATES_URL =
-  "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=YlrQNd&source-path=%2Ftravel%2Fflights&f.sid=-1&bl=boq_travel-frontend-ui_20240101.00_p0&hl=en&soc-app=162&soc-platform=1&soc-device=1&_reqid=1&rt=c";
+const decoder = new TextDecoder("utf-8", { fatal: false });
 
-export function encodeBatchExecuteBody(rpcId: string, payload: unknown): string {
-  // Google batchexecute body is x-www-form-urlencoded with an "f.req" parameter
-  // whose value is a JSON-encoded array of [["<rpcId>", "<inner-json>", null, "generic"]].
-  const innerJson = JSON.stringify(payload);
-  const reqArray = [[[rpcId, innerJson, null, "generic"]]];
-  const reqJson = JSON.stringify(reqArray);
-  return `f.req=${encodeURIComponent(reqJson)}&at=`;
+function toBytes(body: string | Uint8Array): Uint8Array {
+  if (body instanceof Uint8Array) return body;
+  return new TextEncoder().encode(body);
 }
 
-export function parseBatchExecuteResponse(text: string): unknown {
-  // Strip the )]}'  prefix that Google uses to protect against XSSI.
-  const trimmed = text.replace(/^\)]\}'\s*/, "");
-  // The body is a length-prefixed multipart envelope. We greedily JSON.parse
-  // and look for the first wrb.fr response payload.
-  // The naive approach: find every JSON.parse-able substring starting with '['.
-  const matches: unknown[] = [];
+function lstrip(buf: Uint8Array): Uint8Array {
   let i = 0;
-  while (i < trimmed.length) {
-    if (trimmed[i] === "[") {
-      // Try to balance brackets.
-      let depth = 0;
-      let inStr = false;
-      let esc = false;
-      let j = i;
-      for (; j < trimmed.length; j++) {
-        const c = trimmed[j];
-        if (inStr) {
-          if (esc) { esc = false; continue; }
-          if (c === "\\") { esc = true; continue; }
-          if (c === '"') { inStr = false; continue; }
-        } else {
-          if (c === '"') { inStr = true; continue; }
-          if (c === "[") depth++;
-          else if (c === "]") { depth--; if (depth === 0) { j++; break; } }
-        }
-      }
-      const candidate = trimmed.slice(i, j);
-      try {
-        const parsed = JSON.parse(candidate);
-        matches.push(parsed);
-      } catch { /* not valid json; skip */ }
-      i = j;
-    } else {
-      i++;
+  while (i < buf.length) {
+    const b = buf[i];
+    if (b !== 0x20 && b !== 0x09 && b !== 0x0a && b !== 0x0d) break;
+    i++;
+  }
+  return buf.subarray(i);
+}
+
+function startsWith(buf: Uint8Array, prefix: Uint8Array): boolean {
+  if (buf.length < prefix.length) return false;
+  for (let i = 0; i < prefix.length; i++) {
+    if (buf[i] !== prefix[i]) return false;
+  }
+  return true;
+}
+
+function indexOfByte(buf: Uint8Array, byte: number, from = 0): number {
+  for (let i = from; i < buf.length; i++) {
+    if (buf[i] === byte) return i;
+  }
+  return -1;
+}
+
+function* chunksFromOuter(outer: unknown): Generator<unknown> {
+  if (!Array.isArray(outer)) return;
+  for (const row of outer) {
+    if (!Array.isArray(row) || row.length < 3) continue;
+    if (row[0] !== "wrb.fr") continue;
+    const inner = row[2];
+    if (typeof inner !== "string" || inner.length === 0) continue;
+    try {
+      yield JSON.parse(inner);
+    } catch {
+      // Skip malformed inner JSON.
     }
   }
-  // Look for the wrb.fr entry containing inner json string.
-  for (const m of matches) {
-    if (!Array.isArray(m)) continue;
-    for (const row of m) {
-      if (Array.isArray(row) && row[0] === "wrb.fr" && typeof row[2] === "string") {
-        try { return JSON.parse(row[2]); } catch { /* ignore */ }
-      }
+}
+
+/** Yield the inner JSON of every `wrb.fr` chunk in `body`. */
+export function* iterWrbChunks(body: string | Uint8Array): Generator<unknown> {
+  let raw = toBytes(body);
+  raw = lstrip(raw);
+  if (startsWith(raw, PREFIX_BYTES)) {
+    raw = raw.subarray(PREFIX_BYTES.length);
+  }
+  raw = lstrip(raw);
+  if (raw.length === 0) return;
+
+  // Fast path: legacy single-chunk responses with no length headers.
+  const first = raw[0];
+  if (first === undefined || first < 0x30 || first > 0x39) {
+    try {
+      const outer = JSON.parse(decoder.decode(raw));
+      yield* chunksFromOuter(outer);
+    } catch {
+      // Discard malformed body.
     }
+    return;
+  }
+
+  let cursor = 0;
+  while (cursor < raw.length) {
+    const end = indexOfByte(raw, 0x0a, cursor);
+    if (end === -1) break;
+    const headerText = decoder.decode(raw.subarray(cursor, end));
+    // Python's `int(...)` raises on `"12abc"`; `Number.parseInt` returns 12,
+    // which would slip the parser into garbage chunk offsets. Require a pure
+    // decimal header to keep wire-format strictness in sync.
+    if (!/^[0-9]+$/.test(headerText)) break;
+    const length = Number.parseInt(headerText, 10);
+    if (!Number.isFinite(length)) break;
+    cursor = end + 1;
+    const chunkBytes = Math.max(length - 1, 0);
+    const payload = raw.subarray(cursor, cursor + chunkBytes);
+    cursor += chunkBytes;
+    try {
+      const trimmed = decoder.decode(payload).trim();
+      const outer = JSON.parse(trimmed);
+      yield* chunksFromOuter(outer);
+    } catch {
+      // Discard malformed chunks.
+    }
+  }
+}
+
+/** Return the inner JSON of the first `wrb.fr` chunk, or `null`. */
+export function parseFirstWrbPayload(body: string | Uint8Array): unknown {
+  for (const chunk of iterWrbChunks(body)) {
+    return chunk;
   }
   return null;
 }
