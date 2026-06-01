@@ -1,4 +1,4 @@
-// v1.1
+// v1.2
 import { NextRequest, NextResponse } from "next/server";
 import { SearchFlights } from "@/lib/fli/search/flights";
 import { FlightSearchFilters } from "@/lib/fli/models/google-flights/flights";
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
     });
 
     const searcher = new SearchFlights();
-    const results = await searcher.search(filters);
+    const results = await searcher.search(filters, { currency: "USD", language: "en", country: "US" });
 
     if (!results) {
       return NextResponse.json({ flights: [], message: "No results from Google Flights" });

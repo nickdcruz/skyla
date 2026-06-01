@@ -1,4 +1,4 @@
-// v1.1
+// v1.2
 import { NextRequest, NextResponse } from "next/server";
 import { SearchDates } from "@/lib/fli/search/dates";
 import { DateSearchFilters } from "@/lib/fli/models/google-flights/dates";
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
     });
 
     const searcher = new SearchDates();
-    const results = await searcher.search(filters);
+    const results = await searcher.search(filters, { currency: "USD", language: "en", country: "US" });
 
     if (!results) {
       return NextResponse.json({ prices: [], message: "No date prices returned" });
