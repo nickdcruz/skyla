@@ -1,8 +1,28 @@
-// v1.0
+// v1.1
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import type { FlightData, DatePriceData } from "@/types";
 
+// ─── Currency config ────────────────────────────────────────────────────────
+const CURRENCY_OPTIONS = [
+  { code: "SGD", label: "SGD" },
+  { code: "USD", label: "USD" },
+  { code: "AUD", label: "AUD" },
+  { code: "GBP", label: "GBP" },
+  { code: "EUR", label: "EUR" },
+  { code: "JPY", label: "JPY" },
+  { code: "HKD", label: "HKD" },
+  { code: "MYR", label: "MYR" },
+  { code: "AED", label: "AED" },
+];
+
+// Fallback rates (USD base) in case frankfurter.app is down
+const FALLBACK_RATES: Record<string, number> = {
+  USD: 1, SGD: 1.34, AUD: 1.54, GBP: 0.79, EUR: 0.92,
+  JPY: 157, HKD: 7.78, MYR: 4.72, AED: 3.67, ZAR: 18.5,
+};
+
+// ─── Airport autocomplete ────────────────────────────────────────────────────
 interface AirportSuggestion { code: string; name: string; display: string; }
 
 function AirportInput({ label, value, onChange, placeholder }: {
@@ -59,11 +79,7 @@ function AirportInput({ label, value, onChange, placeholder }: {
               cursor: "pointer", color: "var(--text-primary)", fontSize: 14,
               borderBottom: "1px solid var(--border)",
             }}
-            onMouseDown={() => {
-              onChange(s.code, s.name);
-              setQuery(s.display);
-              setOpen(false);
-            }}
+            onMouseDown={() => { onChange(s.code, s.name); setQuery(s.display); setOpen(false); }}
             onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "var(--bg-card-hover)"; }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "none"; }}
             >
@@ -77,25 +93,38 @@ function AirportInput({ label, value, onChange, placeholder }: {
   );
 }
 
+// ─── Currency selector ────────────────────────────────────────────────────────
+function CurrencySelector({ selected, onChange }: { selected: string; onChange: (c: string) => void }) {
+  return (
+    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+      <span style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginRight: 4 }}>Display in</span>
+      {CURRENCY_OPTIONS.map((c) => (
+        <button key={c.code} type="button" onClick={() => onChange(c.code)} style={{
+          padding: "4px 10px", borderRadius: 6, border: `1px solid ${selected === c.code ? "var(--gold)" : "var(--border)"}`,
+          background: selected === c.code ? "rgba(201,168,76,0.12)" : "var(--bg-surface)",
+          color: selected === c.code ? "var(--gold)" : "var(--text-muted)",
+          fontSize: 12, fontWeight: selected === c.code ? 600 : 400, cursor: "pointer",
+          transition: "all 0.15s ease",
+        }}>
+          {c.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 function formatDuration(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
-function formatPrice(price: number | null, currency: string | null): string {
-  if (price == null) return "-";
-  try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: currency ?? "USD", maximumFractionDigits: 0 }).format(price);
-  } catch {
-    return `${currency ?? "USD"} ${price.toLocaleString()}`;
-  }
-}
-
-function FlightCard({ flight }: { flight: FlightData }) {
+// ─── Flight card ──────────────────────────────────────────────────────────────
+function FlightCard({ flight, formatPrice }: { flight: FlightData; formatPrice: (price: number | null, currency: string | null) => string }) {
   const outbound = flight.legs[0];
   return (
-    <div className="glass-card" style={{ padding: "20px 24px", marginBottom: 12, transition: "all 0.2s ease", cursor: "default" }}>
+    <div className="glass-card" style={{ padding: "20px 24px", marginBottom: 12, transition: "all 0.2s ease" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 8 }}>
@@ -126,7 +155,6 @@ function FlightCard({ flight }: { flight: FlightData }) {
             </div>
           ))}
         </div>
-
         <div style={{ textAlign: "right", minWidth: 140 }}>
           <div style={{ fontSize: 28, fontWeight: 700, color: "var(--gold)", lineHeight: 1 }}>
             {formatPrice(flight.price, flight.currency)}
@@ -143,11 +171,13 @@ function FlightCard({ flight }: { flight: FlightData }) {
   );
 }
 
-function PriceCalendar({ prices, origin, destination, onSelectDate }: {
+// ─── Price calendar ────────────────────────────────────────────────────────────
+function PriceCalendar({ prices, origin, destination, onSelectDate, formatPrice }: {
   prices: DatePriceData[];
   origin: string;
   destination: string;
   onSelectDate: (date: string) => void;
+  formatPrice: (price: number | null, currency: string | null) => string;
 }) {
   if (prices.length === 0) return null;
   const min = Math.min(...prices.map((p) => p.price));
@@ -208,9 +238,11 @@ function PriceCalendar({ prices, origin, destination, onSelectDate }: {
   );
 }
 
+// ─── Main page ────────────────────────────────────────────────────────────────
 export default function HomePage() {
   const [mode, setMode] = useState<"specific" | "flexible">("specific");
 
+  // Search state
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
   const [departureDate, setDepartureDate] = useState("");
@@ -220,15 +252,47 @@ export default function HomePage() {
   const [adults, setAdults] = useState(1);
   const [stops, setStops] = useState<"ANY" | "NON_STOP" | "ONE_STOP_OR_FEWER">("ANY");
   const [sortBy, setSortBy] = useState<"BEST" | "CHEAPEST" | "DURATION" | "DEPARTURE_TIME">("BEST");
-
   const [flexFromDate, setFlexFromDate] = useState("");
   const [flexToDate, setFlexToDate] = useState("");
 
+  // Results state
   const [flights, setFlights] = useState<FlightData[]>([]);
   const [prices, setPrices] = useState<DatePriceData[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
+
+  // Currency state
+  const [displayCurrency, setDisplayCurrency] = useState("SGD");
+  const [rates, setRates] = useState<Record<string, number>>(FALLBACK_RATES);
+  const [showCurrencySelector, setShowCurrencySelector] = useState(false);
+
+  // Fetch live exchange rates on mount (from USD as base)
+  useEffect(() => {
+    const codes = CURRENCY_OPTIONS.map((c) => c.code).filter((c) => c !== "USD").join(",") + ",ZAR,THB,IDR";
+    fetch(`https://api.frankfurter.app/latest?from=USD&to=${codes}`)
+      .then((r) => r.json())
+      .then((data: { rates?: Record<string, number> }) => {
+        if (data.rates) setRates({ ...FALLBACK_RATES, ...data.rates, USD: 1 });
+      })
+      .catch(() => {}); // silently use fallback rates
+  }, []);
+
+  // Convert and format price from source currency to display currency
+  const formatPrice = useCallback((price: number | null, sourceCurrency: string | null): string => {
+    if (price == null) return "-";
+    const src = sourceCurrency ?? "USD";
+    const srcRate = rates[src] ?? 1;
+    const dstRate = rates[displayCurrency] ?? 1;
+    const converted = price * dstRate / srcRate;
+    try {
+      return new Intl.NumberFormat("en-SG", {
+        style: "currency", currency: displayCurrency, maximumFractionDigits: 0,
+      }).format(converted);
+    } catch {
+      return `${displayCurrency} ${Math.round(converted).toLocaleString()}`;
+    }
+  }, [rates, displayCurrency]);
 
   const today = new Date().toISOString().split("T")[0]!;
 
@@ -238,30 +302,22 @@ export default function HomePage() {
     if (mode === "flexible" && (!flexFromDate || !flexToDate)) { setError("Please select a date range."); return; }
     if (mode === "specific" && tripType === "ROUND_TRIP" && !returnDate) { setError("Please select a return date."); return; }
 
-    setLoading(true);
-    setError(null);
-    setFlights([]);
-    setPrices([]);
-    setSearched(true);
+    setLoading(true); setError(null); setFlights([]); setPrices([]); setSearched(true);
 
     try {
       if (mode === "specific") {
         const res = await fetch("/api/flights", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            origin, destination, departureDate,
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ origin, destination, departureDate,
             returnDate: tripType === "ROUND_TRIP" ? returnDate : undefined,
-            tripType, cabinClass, adults, stops, sortBy,
-          }),
+            tripType, cabinClass, adults, stops, sortBy }),
         });
         const data = (await res.json()) as { flights?: FlightData[]; error?: string };
         if (data.error) throw new Error(data.error);
         setFlights(data.flights ?? []);
       } else {
         const res = await fetch("/api/dates", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
+          method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify({ origin, destination, fromDate: flexFromDate, toDate: flexToDate, cabinClass, adults, stops }),
         });
         const data = (await res.json()) as { prices?: DatePriceData[]; error?: string };
@@ -276,21 +332,18 @@ export default function HomePage() {
   }
 
   function handleSelectDate(date: string) {
-    setMode("specific");
-    setDepartureDate(date);
-    setFlights([]);
-    setPrices([]);
-    setSearched(false);
+    setMode("specific"); setDepartureDate(date);
+    setFlights([]); setPrices([]); setSearched(false);
   }
 
-  function swapAirports() {
-    setOrigin(destination);
-    setDestination(origin);
-  }
+  function swapAirports() { setOrigin(destination); setDestination(origin); }
+
+  const hasResults = flights.length > 0 || prices.length > 0;
 
   return (
     <main style={{ maxWidth: 960, margin: "0 auto", padding: "32px 24px" }}>
-      <div style={{ marginBottom: 40, textAlign: "center" }}>
+      {/* Hero */}
+      <div style={{ marginBottom: 32, textAlign: "center" }}>
         <h1 style={{ fontSize: "clamp(32px, 5vw, 52px)", fontWeight: 800, letterSpacing: "-0.03em", lineHeight: 1.1, marginBottom: 12 }}>
           Find your next <span className="gold-gradient">flight</span>
         </h1>
@@ -299,19 +352,44 @@ export default function HomePage() {
         </p>
       </div>
 
-      <div style={{ display: "flex", gap: 4, marginBottom: 24, background: "var(--bg-surface)", borderRadius: 10, padding: 4, width: "fit-content" }}>
-        {(["specific", "flexible"] as const).map((m) => (
-          <button key={m} type="button" onClick={() => setMode(m)} style={{
-            padding: "8px 20px", borderRadius: 7, border: "none", cursor: "pointer", fontSize: 14, fontWeight: 500,
-            background: mode === m ? "var(--bg-card)" : "transparent",
-            color: mode === m ? "var(--text-primary)" : "var(--text-muted)",
-            transition: "all 0.15s ease",
-          }}>
-            {m === "specific" ? "Specific Dates" : "Flexible / Cheapest"}
-          </button>
-        ))}
+      {/* Mode tabs + currency selector row */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 24 }}>
+        <div style={{ display: "flex", gap: 4, background: "var(--bg-surface)", borderRadius: 10, padding: 4 }}>
+          {(["specific", "flexible"] as const).map((m) => (
+            <button key={m} type="button" onClick={() => setMode(m)} style={{
+              padding: "8px 20px", borderRadius: 7, border: "none", cursor: "pointer", fontSize: 14, fontWeight: 500,
+              background: mode === m ? "var(--bg-card)" : "transparent",
+              color: mode === m ? "var(--text-primary)" : "var(--text-muted)",
+              transition: "all 0.15s ease",
+            }}>
+              {m === "specific" ? "Specific Dates" : "Flexible / Cheapest"}
+            </button>
+          ))}
+        </div>
+
+        {/* Currency toggle button */}
+        <button type="button" onClick={() => setShowCurrencySelector((v) => !v)} style={{
+          display: "flex", alignItems: "center", gap: 6,
+          padding: "7px 14px", borderRadius: 8,
+          border: `1px solid ${showCurrencySelector ? "var(--gold)" : "var(--border)"}`,
+          background: showCurrencySelector ? "rgba(201,168,76,0.08)" : "var(--bg-surface)",
+          color: showCurrencySelector ? "var(--gold)" : "var(--text-secondary)",
+          fontSize: 13, fontWeight: 600, cursor: "pointer", transition: "all 0.15s ease",
+        }}>
+          <span style={{ fontSize: 15 }}>&#9654;</span>
+          {displayCurrency}
+          <span style={{ fontSize: 10, opacity: 0.6 }}>{showCurrencySelector ? "▲" : "▼"}</span>
+        </button>
       </div>
 
+      {/* Currency selector panel */}
+      {showCurrencySelector && (
+        <div className="glass-card" style={{ padding: "14px 18px", marginBottom: 16 }}>
+          <CurrencySelector selected={displayCurrency} onChange={(c) => { setDisplayCurrency(c); setShowCurrencySelector(false); }} />
+        </div>
+      )}
+
+      {/* Search form */}
       <div className="glass-card" style={{ padding: 24, marginBottom: 32 }}>
         {mode === "specific" && (
           <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
@@ -319,8 +397,7 @@ export default function HomePage() {
               <button key={t} type="button" onClick={() => setTripType(t)} className="btn-secondary" style={{
                 background: tripType === t ? "rgba(201,168,76,0.1)" : "transparent",
                 borderColor: tripType === t ? "var(--gold)" : "var(--border)",
-                color: tripType === t ? "var(--gold)" : "var(--text-muted)",
-                fontSize: 13,
+                color: tripType === t ? "var(--gold)" : "var(--text-muted)", fontSize: 13,
               }}>
                 {t === "ONE_WAY" ? "One Way" : "Round Trip"}
               </button>
@@ -412,45 +489,46 @@ export default function HomePage() {
               Searching...
             </>
           ) : (
-            <>
-              <span>&#9992;</span>
-              {mode === "specific" ? "Search Flights" : "Find Cheapest Dates"}
-            </>
+            <><span>&#9992;</span>{mode === "specific" ? "Search Flights" : "Find Cheapest Dates"}</>
           )}
         </button>
       </div>
 
+      {/* Error */}
       {error && (
         <div style={{ background: "rgba(224,82,82,0.1)", border: "1px solid rgba(224,82,82,0.3)", borderRadius: 10, padding: "14px 18px", marginBottom: 24, color: "var(--red)", fontSize: 14 }}>
           {error}
         </div>
       )}
 
+      {/* Loading skeletons */}
       {loading && (
-        <div>
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="skeleton" style={{ height: 100, marginBottom: 12 }} />
-          ))}
+        <div>{[1, 2, 3].map((i) => <div key={i} className="skeleton" style={{ height: 100, marginBottom: 12 }} />)}</div>
+      )}
+
+      {/* Results header with currency selector */}
+      {!loading && hasResults && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+          <h2 style={{ fontSize: 14, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            {flights.length > 0 ? `${flights.length} flight${flights.length !== 1 ? "s" : ""} found` : `${prices.length} date${prices.length !== 1 ? "s" : ""} found`}
+          </h2>
+          <CurrencySelector selected={displayCurrency} onChange={setDisplayCurrency} />
         </div>
       )}
 
+      {/* Flexible date results */}
       {!loading && mode === "flexible" && prices.length > 0 && (
         <div className="glass-card" style={{ padding: 24, marginBottom: 24 }}>
-          <PriceCalendar prices={prices} origin={origin} destination={destination} onSelectDate={handleSelectDate} />
+          <PriceCalendar prices={prices} origin={origin} destination={destination} onSelectDate={handleSelectDate} formatPrice={formatPrice} />
         </div>
       )}
 
+      {/* Specific date results */}
       {!loading && flights.length > 0 && (
-        <div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-            <h2 style={{ fontSize: 14, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-              {flights.length} flight{flights.length !== 1 ? "s" : ""} found
-            </h2>
-          </div>
-          {flights.map((f) => <FlightCard key={f.id} flight={f} />)}
-        </div>
+        <div>{flights.map((f) => <FlightCard key={f.id} flight={f} formatPrice={formatPrice} />)}</div>
       )}
 
+      {/* Empty state */}
       {!loading && searched && flights.length === 0 && prices.length === 0 && !error && (
         <div style={{ textAlign: "center", padding: "48px 24px", color: "var(--text-muted)" }}>
           <div style={{ fontSize: 40, marginBottom: 12 }}>&#9992;</div>
